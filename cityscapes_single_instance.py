@@ -58,6 +58,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         augmentations=None,
         scale_transform=Compose([Resize([224, 224])]),
         version="cityscapes",
+        multitask=False,
     ):
         """__init__
         :param root:
@@ -71,6 +72,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         self.is_transform = is_transform
         self.augmentations = augmentations
         self.scale_transform = scale_transform
+        self.multitask = multitask
         
         self.n_classes = 8 #19
         self.img_size = (
@@ -236,12 +238,19 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         img = Image.fromarray(img)
         ins = Image.fromarray(ins)
         img, [ins] = self.scale_transform(img, [ins])
+
+        seg = None
+        if self.multitask:
+            seg = tf.to_tensor(ins > 0.5).long().squeeze(0)
         
         ins = get_boundary_map(ins)
-        
+
         img = tf.to_tensor(img).float()
         ins = (tf.to_tensor(ins).long().squeeze(0))
-        
+
+        if self.multitask:
+            return img, (ins, seg)
+
         return img, ins
     
 

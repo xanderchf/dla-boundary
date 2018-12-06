@@ -155,19 +155,24 @@ class SegListMS(torch.utils.data.Dataset):
             assert len(self.image_list) == len(self.label_list)
 
 
-def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print_freq=10):
+def validate(val_loader, model, criterion1, criterion2, epoch, writer, eval_score=None, print_freq=10):
     batch_time = AverageMeter()
     losses = AverageMeter()
-    score = AverageMeter()
+    score1 = AverageMeter()
+    score2 = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
 
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
-        if type(criterion) in [torch.nn.modules.loss.L1Loss,
+        target1, target2 = target
+        if type(criterion1) in [torch.nn.modules.loss.L1Loss,
                                torch.nn.modules.loss.MSELoss]:
-            target = target.float()
+            target1 = target1.float()
+        if type(criterion2) in [torch.nn.modules.loss.L1Loss,
+                               torch.nn.modules.loss.MSELoss]:
+            target2 = target2.float()
 
         if i % print_freq == 0:
             step = i + len(val_loader) * epoch
@@ -176,17 +181,21 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
         input = input.cuda()
         target = target.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
+        target_var1 = torch.autograd.Variable(target1, volatile=True)
+        target_var2 = torch.autograd.Variable(target2, volatile=True)
 
         # compute output
         output = model(input_var)[0]
-        loss = criterion(output, target_var)
+        loss1 = criterion1(output[:,:2], target_var1)
+        loss2 = criterion2(output[:,2:], target_var2)
+        loss = loss1 + loss2
 
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         losses.update(loss.data[0], input.size(0))
         if eval_score is not None:
-            score.update(eval_score(output, target_var), input.size(0))
+            score1.update(eval_score(output, target_var1), input.size(0))
+            score2.update(eval_score(output, target_var2), input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -194,25 +203,32 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
 
         if i % print_freq == 0:
             writer.add_scalar('validate/loss', losses.avg, step)
-            writer.add_scalar('validate/score_avg', score.avg, step)
-            writer.add_scalar('validate/score', score.val, step)
+            writer.add_scalar('validate/score1_avg', score1.avg, step)
+            writer.add_scalar('validate/score1', score1.val, step)
+            writer.add_scalar('validate/score2_avg', score2.avg, step)
+            writer.add_scalar('validate/score2', score2.val, step)
             
-            prediction = np.argmax(output.detach().cpu().numpy(), axis=1)
-            prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
+            prediction1 = np.argmax(output[:,:2].detach().cpu().numpy(), axis=1)
+            prob1 = torch.nn.functional.softmax(output[:,:2].detach().cpu(), dim=1).numpy()
+            prediction2 = np.argmax(output[:,2:].detach().cpu().numpy(), axis=1)
+            prob2 = torch.nn.functional.softmax(output[:,2:].detach().cpu(), dim=1).numpy()
 
             writer.add_image('validate/gt', target[0].cpu().numpy(), step)
-            writer.add_image('validate/predicted', prediction[0], step)
-            writer.add_image('validate/prob', prob[0][1], step)
+            writer.add_image('validate/predicted1', prediction1[0], step)
+            writer.add_image('validate/prob1', prob1[0][1], step)
+            writer.add_image('validate/predicted2', prediction2[0], step)
+            writer.add_image('validate/prob2', prob2[0][1], step)
             print('Test: [{0}/{1}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Score {score.val:.3f} ({score.avg:.3f})'.format(
+                  'Score {score1.val:.3f} ({score1.avg:.3f})\t'
+                  'Score {score2.val:.3f} ({score2.avg:.3f})'.format(
                     i, len(val_loader), batch_time=batch_time, loss=losses,
-                    score=score), flush=True)
+                    score1=score1, score2=score2), flush=True)
 
-    print(' * Score {top1.avg:.3f}'.format(top1=score))
+    print(' * Score {top1.avg:.3f} {top2.avg:.3f}'.format(top1=score1, top2=score2))
 
-    return score.avg
+    return score1.avg, score2.avg
 
 
 class AverageMeter(object):
@@ -247,12 +263,13 @@ def accuracy(output, target):
     return score.data[0]
 
 
-def train(train_loader, model, criterion, optimizer, epoch, writer,
+def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
           eval_score=None, print_freq=10):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
-    scores = AverageMeter()
+    scores1 = AverageMeter()
+    scores2 = AverageMeter()
 
     # switch to train mode
     model.train()
@@ -268,10 +285,14 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
         data_time.update(time.time() - end)
 
         # pdb.set_trace()
+        target1, target2 = target
 
-        if type(criterion) in [torch.nn.modules.loss.L1Loss,
+        if type(criterion1) in [torch.nn.modules.loss.L1Loss,
                                torch.nn.modules.loss.MSELoss]:
-            target = target.float()
+            target1 = target1.float()
+        if type(criterion2) in [torch.nn.modules.loss.L1Loss,
+                                torch.nn.modules.loss.MSELoss]:
+            target2 = target2.float()
         
         if i % print_freq == 0:
             step = i + len(train_loader) * epoch
@@ -281,17 +302,21 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
         input = input.cuda()
         target = target.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
+        target_var1 = torch.autograd.Variable(target1)
+        target_var2 = torch.autograd.Variable(target2)
         
         # compute output
         output = model(input_var)[0]
-        loss = criterion(output, target_var)
+        loss1 = criterion1(output[:, :2], target_var1)
+        loss2 = criterion2(output[:, 2:], target_var2)
+        loss = loss1 + loss2
 
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         losses.update(loss.data[0], input.size(0))
         if eval_score is not None:
-            scores.update(eval_score(output, target_var), input.size(0))
+            scores1.update(eval_score(output, target_var1), input.size(0))
+            scores2.update(eval_score(output, target_var2), input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -305,22 +330,29 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
         if i % print_freq == 0:
             # broadcast results to tensorboard
             writer.add_scalar('train/loss', losses.avg, step)
-            writer.add_scalar('train/score_avg', scores.avg, step)
-            writer.add_scalar('train/score', scores.val, step)
+            writer.add_scalar('train/score1_avg', scores1.avg, step)
+            writer.add_scalar('train/score1', scores1.val, step)
+            writer.add_scalar('train/score1_avg', scores2.avg, step)
+            writer.add_scalar('train/score1', scores2.val, step)
             
-            prediction = np.argmax(output.detach().cpu().numpy(), axis=1)
-            prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
+            prediction1 = np.argmax(output[:, :2].detach().cpu().numpy(), axis=1)
+            prob1 = torch.nn.functional.softmax(output[:, :2].detach().cpu(), dim=1).numpy()
+            prediction2 = np.argmax(output[:, 2:].detach().cpu().numpy(), axis=1)
+            prob2 = torch.nn.functional.softmax(output[:, 2:].detach().cpu(), dim=1).numpy()
 
             writer.add_image('train/gt', target[0].cpu().numpy(), step)
-            writer.add_image('train/predicted', prediction[0], step)
-            writer.add_image('train/prob', prob[0][1], step)
+            writer.add_image('train/predicted1', prediction1[0], step)
+            writer.add_image('train/prob1', prob1[0][1], step)
+            writer.add_image('train/predicted2', prediction2[0], step)
+            writer.add_image('train/prob2', prob2[0][1], step)
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Score {top1.val:.3f} ({top1.avg:.3f})'.format(
+                  'Score1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                  'Score2 {top2.val:.3f} ({top2.avg:.3f})'.format(
                     epoch, i, len(train_loader), batch_time=batch_time,
-                    data_time=data_time, loss=losses, top1=scores))
+                    data_time=data_time, loss=losses, top1=scores1, top2=scores2))
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -343,14 +375,14 @@ def train_seg(args, writer):
     single_model = dla_up.__dict__.get(args.arch)(
         args.classes, pretrained_base, down_ratio=args.down)
     model = torch.nn.DataParallel(single_model).cuda()
-    if args.edge_weight > 0:
-        weight = torch.from_numpy(
-            np.array([1, args.edge_weight], dtype=np.float32))
-        criterion = nn.NLLLoss2d(ignore_index=255, weight=weight)
-    else:
-        criterion = nn.NLLLoss2d(ignore_index=255)
+    assert args.edge_weight > 0
+    weight = torch.from_numpy(
+        np.array([1, args.edge_weight], dtype=np.float32))
+    criterion1 = nn.NLLLoss2d(ignore_index=255, weight=weight)
+    criterion2 = nn.NLLLoss2d(ignore_index=255)
 
-    criterion.cuda()
+    criterion1.cuda()
+    criterion2.cuda()
 
     data_dir = args.data_dir
     info = dataset.load_dataset_info(data_dir)
@@ -367,12 +399,12 @@ def train_seg(args, writer):
               transforms.ToTensor(),
               normalize])
     train_loader = torch.utils.data.DataLoader(
-        CityscapesSingleInstanceDataset(data_dir, 'train'),
+        CityscapesSingleInstanceDataset(data_dir, 'train', multitask=args.multitask),
         batch_size=batch_size, shuffle=True, num_workers=num_workers,
         pin_memory=True
     )
     val_loader = torch.utils.data.DataLoader(
-        CityscapesSingleInstanceDataset(data_dir, 'val'),
+        CityscapesSingleInstanceDataset(data_dir, 'val', multitask=args.multitask),
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
         pin_memory=True
     )
@@ -381,7 +413,7 @@ def train_seg(args, writer):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
     cudnn.benchmark = True
-    best_prec1 = 0
+    best_prec1, best_prec2 = 0, 0
     start_epoch = 0
 
     # optionally resume from a checkpoint
@@ -391,6 +423,7 @@ def train_seg(args, writer):
             checkpoint = torch.load(args.resume)
             start_epoch = checkpoint['epoch']
             best_prec1 = checkpoint['best_prec1']
+            best_prec2 = checkpoint['best_prec2']
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
@@ -398,27 +431,29 @@ def train_seg(args, writer):
             print("=> no checkpoint found at '{}'".format(args.resume))
 
     if args.evaluate and start_epoch > 0:
-        validate(val_loader, model, criterion, start_epoch-1, writer, eval_score=accuracy)
+        validate(val_loader, model, criterion1, criterion2, start_epoch-1, writer, eval_score=accuracy)
         return
 
     for epoch in range(start_epoch, args.epochs):
         lr = adjust_learning_rate(args, optimizer, epoch)
         print('Epoch: [{0}]\tlr {1:.06f}'.format(epoch, lr))
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, writer,
+        train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
               eval_score=accuracy)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, epoch, writer, eval_score=accuracy)
+        prec1, prec2 = validate(val_loader, model, criterion1, criterion2, epoch, writer, eval_score=accuracy)
 
-        is_best = prec1 > best_prec1
+        is_best = prec1 > best_prec1 and prec2 > best_prec2
         best_prec1 = max(prec1, best_prec1)
+        best_prec2 = max(prec2, best_prec2)
         checkpoint_path = 'checkpoint_latest.pth.tar'
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': args.arch,
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
+            'best_prec2': best_prec2,
         }, is_best, filename=checkpoint_path)
         if (epoch + 1) % args.save_freq == 0:
             history_path = 'checkpoint_{:03d}.pth.tar'.format(epoch + 1)
@@ -741,6 +776,7 @@ def parse_args():
     parser.add_argument('--edge-weight', type=int, default=-1)
     parser.add_argument('--test-suffix', default='')
     parser.add_argument('--with-gt', action='store_true')
+    parser.add_argument('--multitask', action='store_true', default=False)
     args = parser.parse_args()
     args.cuda = not args.no_cuda and torch.cuda.is_available()
 
