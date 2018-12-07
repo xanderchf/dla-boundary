@@ -358,7 +358,7 @@ def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, 'multitask_model_best.pth.tar')
 
 
 def train_seg(args, writer):
@@ -447,7 +447,7 @@ def train_seg(args, writer):
         is_best = prec1 > best_prec1 and prec2 > best_prec2
         best_prec1 = max(prec1, best_prec1)
         best_prec2 = max(prec2, best_prec2)
-        checkpoint_path = 'checkpoint_latest.pth.tar'
+        checkpoint_path = 'multitask_checkpoint_latest.pth.tar'
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': args.arch,
