@@ -195,8 +195,8 @@ def validate(val_loader, model, criterion1, criterion2, epoch, writer, eval_scor
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         losses.update(loss.data[0], input.size(0))
         if eval_score is not None:
-            score1.update(eval_score(output, target_var1), input.size(0))
-            score2.update(eval_score(output, target_var2), input.size(0))
+            score1.update(eval_score(output[:, :2], target_var1), input.size(0))
+            score2.update(eval_score(output[:, 2:], target_var2), input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -318,8 +318,8 @@ def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         losses.update(loss.data[0], input.size(0))
         if eval_score is not None:
-            scores1.update(eval_score(output, target_var1), input.size(0))
-            scores2.update(eval_score(output, target_var2), input.size(0))
+            scores1.update(eval_score(output[:, :2], target_var1), input.size(0))
+            scores2.update(eval_score(output[:, 2:], target_var2), input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
