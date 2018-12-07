@@ -335,8 +335,8 @@ def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
             writer.add_scalar('train/loss', losses.avg, step)
             writer.add_scalar('train/score1_avg', scores1.avg, step)
             writer.add_scalar('train/score1', scores1.val, step)
-            writer.add_scalar('train/score1_avg', scores2.avg, step)
-            writer.add_scalar('train/score1', scores2.val, step)
+            writer.add_scalar('train/score2_avg', scores2.avg, step)
+            writer.add_scalar('train/score2', scores2.val, step)
             
             prediction1 = np.argmax(output[:, :2].detach().cpu().numpy(), axis=1)
             prob1 = torch.nn.functional.softmax(output[:, :2].detach().cpu(), dim=1).numpy()

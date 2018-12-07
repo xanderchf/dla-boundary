@@ -237,12 +237,12 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         
         img = Image.fromarray(img)
         ins = Image.fromarray(ins)
+        
         img, [ins] = self.scale_transform(img, [ins])
 
         seg = None
         if self.multitask:
-            seg = tf.to_tensor(ins).long().squeeze(0)
-        
+            seg = torch.from_numpy(np.array(ins)).long().squeeze(0) 
         ins = get_boundary_map(ins)
 
         img = tf.to_tensor(img).float()
