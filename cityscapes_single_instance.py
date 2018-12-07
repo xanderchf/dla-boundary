@@ -241,7 +241,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
 
         seg = None
         if self.multitask:
-            seg = tf.to_tensor(ins > 0.5).long().squeeze(0)
+            seg = tf.to_tensor(ins).long().squeeze(0)
         
         ins = get_boundary_map(ins)
 

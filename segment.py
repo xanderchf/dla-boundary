@@ -179,7 +179,8 @@ def validate(val_loader, model, criterion1, criterion2, epoch, writer, eval_scor
             writer.add_image('validate/image', input[0].numpy(), step)
 
         input = input.cuda()
-        target = target.cuda(non_blocking=True)
+        target1 = target1.cuda(non_blocking=True)
+        target2 = target2.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var1 = torch.autograd.Variable(target1, volatile=True)
         target_var2 = torch.autograd.Variable(target2, volatile=True)
@@ -300,7 +301,8 @@ def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
             
         input = normalize(input)
         input = input.cuda()
-        target = target.cuda(non_blocking=True)
+        target1 = target1.cuda(non_blocking=True)
+        target2 = target2.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input)
         target_var1 = torch.autograd.Variable(target1)
         target_var2 = torch.autograd.Variable(target2)
