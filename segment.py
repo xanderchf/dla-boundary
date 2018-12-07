@@ -165,8 +165,8 @@ def validate(val_loader, model, criterion1, criterion2, epoch, writer, eval_scor
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
-        target1, target2 = target
+    for i, (input, data) in enumerate(val_loader):
+        target1, target2 = data
         if type(criterion1) in [torch.nn.modules.loss.L1Loss,
                                torch.nn.modules.loss.MSELoss]:
             target1 = target1.float()
@@ -214,7 +214,8 @@ def validate(val_loader, model, criterion1, criterion2, epoch, writer, eval_scor
             prediction2 = np.argmax(output[:,2:].detach().cpu().numpy(), axis=1)
             prob2 = torch.nn.functional.softmax(output[:,2:].detach().cpu(), dim=1).numpy()
 
-            writer.add_image('validate/gt', target[0].cpu().numpy(), step)
+            writer.add_image('validate/gt1', target1[0].cpu().numpy(), step)
+            writer.add_image('validate/gt2', target2[0].cpu().numpy(), step)
             writer.add_image('validate/predicted1', prediction1[0], step)
             writer.add_image('validate/prob1', prob1[0][1], step)
             writer.add_image('validate/predicted2', prediction2[0], step)
@@ -281,12 +282,12 @@ def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
     info = train_loader.dataset.load_dataset_info()
     normalize = Normalize(mean=info['mean'], std=info['std'])
 
-    for i, (input, target) in enumerate(train_loader):
+    for i, (input, data) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         # pdb.set_trace()
-        target1, target2 = target
+        target1, target2 = data
 
         if type(criterion1) in [torch.nn.modules.loss.L1Loss,
                                torch.nn.modules.loss.MSELoss]:
@@ -342,7 +343,8 @@ def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
             prediction2 = np.argmax(output[:, 2:].detach().cpu().numpy(), axis=1)
             prob2 = torch.nn.functional.softmax(output[:, 2:].detach().cpu(), dim=1).numpy()
 
-            writer.add_image('train/gt', target[0].cpu().numpy(), step)
+            writer.add_image('train/gt1', target1[0].cpu().numpy(), step)
+            writer.add_image('train/gt2', target2[0].cpu().numpy(), step)
             writer.add_image('train/predicted1', prediction1[0], step)
             writer.add_image('train/prob1', prob1[0][1], step)
             writer.add_image('train/predicted2', prediction2[0], step)
