@@ -359,10 +359,10 @@ def train(train_loader, model, criterion1, criterion2, optimizer, epoch, writer,
                     data_time=data_time, loss=losses, top1=scores1, top2=scores2))
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar', bestname='multitask_model_best.pth.tar'):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'multitask_model_best.pth.tar')
+        shutil.copyfile(filename, bestname)
 
 
 def train_seg(args, writer):
@@ -448,7 +448,8 @@ def train_seg(args, writer):
         # evaluate on validation set
         prec1, prec2 = validate(val_loader, model, criterion1, criterion2, epoch, writer, eval_score=accuracy)
 
-        is_best = prec1 > best_prec1 and prec2 > best_prec2
+        is_best1 = prec1 > best_prec1
+        is_best2 = prec2 > best_prec2
         best_prec1 = max(prec1, best_prec1)
         best_prec2 = max(prec2, best_prec2)
         checkpoint_path = 'multitask_checkpoint_latest.pth.tar'
@@ -458,7 +459,14 @@ def train_seg(args, writer):
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
             'best_prec2': best_prec2,
-        }, is_best, filename=checkpoint_path)
+        }, is_best1, filename=checkpoint_path, bestname='multitask_best_boundary.pth.tar')
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+            'best_prec2': best_prec2,
+        }, is_best2, filename=checkpoint_path, bestname='multitask_best_segment.pth.tar')
         if (epoch + 1) % args.save_freq == 0:
             history_path = 'checkpoint_{:03d}.pth.tar'.format(epoch + 1)
             shutil.copyfile(checkpoint_path, history_path)
