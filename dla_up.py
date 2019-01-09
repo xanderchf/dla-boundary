@@ -95,11 +95,12 @@ class IDAUp(nn.Module):
 
 
 class DLAUp(nn.Module):
-    def __init__(self, channels, scales=(1, 2, 4, 8, 16), in_channels=None):
+    def __init__(self, channels, scales=(1, 2, 4, 8, 16), in_channels=None, return_levels=False):
         super(DLAUp, self).__init__()
         if in_channels is None:
             in_channels = channels
         self.channels = channels
+        self.return_levels = return_levels
         channels = list(channels)
         scales = np.array(scales, dtype=int)
         for i in range(len(channels) - 1):
@@ -117,12 +118,14 @@ class DLAUp(nn.Module):
             ida = getattr(self, 'ida_{}'.format(i))
             x, y = ida(layers[-i - 2:])
             layers[-i - 1:] = y
+        if self.return_levels:
+            return x, [layers[1]] + y
         return x
 
 
 class DLASeg(nn.Module):
     def __init__(self, base_name, classes,
-                 pretrained_base=None, down_ratio=2):
+                 pretrained_base=None, down_ratio=2, return_levels=False):
         super(DLASeg, self).__init__()
         assert down_ratio in [2, 4, 8, 16]
         self.first_level = int(np.log2(down_ratio))
@@ -130,7 +133,7 @@ class DLASeg(nn.Module):
                                             return_levels=True)
         channels = self.base.channels
         scales = [2 ** i for i in range(len(channels[self.first_level:]))]
-        self.dla_up = DLAUp(channels[self.first_level:], scales=scales)
+        self.dla_up = DLAUp(channels[self.first_level:], scales=scales, return_levels=return_levels)
         self.fc = nn.Sequential(
             nn.Conv2d(channels[self.first_level], classes, kernel_size=1,
                       stride=1, padding=0, bias=True)
@@ -147,6 +150,7 @@ class DLASeg(nn.Module):
             up = Identity()
         self.up = up
         self.softmax = nn.LogSoftmax(dim=1)
+        self.return_levels = return_levels
 
         for m in self.fc.modules():
             if isinstance(m, nn.Conv2d):
@@ -158,10 +162,13 @@ class DLASeg(nn.Module):
 
     def forward(self, x):
         x = self.base(x)
-        x = self.dla_up(x[self.first_level:])
+        x, layers = self.dla_up(x[self.first_level:])
         x = self.fc(x)
         y = self.softmax(self.up(x))
+        if self.return_levels:
+            return y, x, layers
         return y, x
+            
 
     def optim_parameters(self, memo=None):
         for param in self.base.parameters():
