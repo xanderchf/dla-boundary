@@ -200,12 +200,12 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
             writer.add_scalar('validate/score_avg', score.avg, step)
             writer.add_scalar('validate/score', score.val, step)
             
-            prediction = np.argmax(output.detach().cpu().numpy(), axis=1)
-            prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
+            prob = output.detach().view(target_var.size()).cpu().numpy()
+            prediction = prob > 0.5
 
             writer.add_image('validate/gt', target[0].cpu().numpy(), step)
             writer.add_image('validate/predicted', prediction[0], step)
-            writer.add_image('validate/prob', prob[0][1], step)
+            writer.add_image('validate/prob', prob[0], step)
             print('Test: [{0}/{1}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
