@@ -231,13 +231,13 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         img, ins = self.crop_bbox(img, ins, bbox)
         
         ins[ins != self.ins_ids[index]] = 0
-        ins[ins == self.ins_ids[index]] = 1
+        ins[ins == self.ins_ids[index]] = 255
         
         img = Image.fromarray(img)
         ins = Image.fromarray(ins)
         img, [ins] = self.scale_transform(img, [ins])
         
-        ins = get_boundary_map(ins)
+#         ins = get_boundary_map(ins)
         
         img = tf.to_tensor(img).float()
         ins = (tf.to_tensor(ins).long().squeeze(0))

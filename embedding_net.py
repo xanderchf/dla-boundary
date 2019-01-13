@@ -4,12 +4,11 @@ import dla, dla_up
 
 
 def embeddingLoss(gt, phi):
-    N, H, W = gt.size()
-    gt = gt.view(N, 1, -1)
+    gt = gt.view(gt.size(0), 1, -1)
     pixels = torch.sum(gt)
     mask = gt * phi
-    avg = torch.sum(mask, dim=1, keepdim=True) / pixels
-    diff = ((phi - avg) ** 2) ** 0.5
+    avg = torch.sum(mask, dim=2, keepdim=True) / pixels
+    diff = torch.sum((phi - avg) ** 2, dim=1) ** 0.5
     return torch.sum(diff) / pixels 
     
     
@@ -67,11 +66,17 @@ class EmbeddingNet(nn.Module):
         if self.up:
             x = self.up(x)
         
+        _delta = 1. / x.size(2)
+        delta = 0
         for i in range(x.size(2)):
-            x[:, 0, i, :] += i
+            x[:, 0, i, :] += delta
+            delta += _delta
             
+        _delta = 1. / x.size(3)
+        delta = 0
         for j in range(x.size(3)):
-            x[:, 1, :, j] += j
+            x[:, 1, :, j] += delta
+            delta += _delta
             
         return x
         
@@ -81,8 +86,6 @@ def FlatEmbeddingNet(pretrained=None, **kwargs):
     if pretrained is not None:
         model.load_pretrained_model(pretrained, 'embedding_net')
     return model
-    
-
     
     
 

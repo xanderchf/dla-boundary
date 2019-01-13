@@ -4,7 +4,7 @@ from torch import nn
 
 def LaplacianKernel(seed, embed, sigma):
 
-    return torch.exp(-torch.sum(torch.abs(seed - embed), dim=1) / sigma)
+    return torch.exp(-torch.sum((seed - embed) ** 2, dim=1) ** 0.5 / sigma)
 
 
 class KernelLayer(nn.Module):
@@ -30,6 +30,7 @@ class KernelLayer(nn.Module):
         
         # Apply kernel, return score map
         dist = self.kernel(seed, embed, self.sigma)
-        return torch.sigmoid(score.squeeze(1) + dist), embed
+        out = score.squeeze(1) + torch.log(dist + 1e-12)
+        return torch.sigmoid(out), embed
         
     

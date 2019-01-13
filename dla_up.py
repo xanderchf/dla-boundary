@@ -164,7 +164,10 @@ class DLASeg(nn.Module):
         x = self.base(x)
         x, layers = self.dla_up(x[self.first_level:])
         x = self.fc(x)
-        y = self.softmax(self.up(x))
+        x = self.up(x)
+        
+#         y = self.softmax(x)
+        y = torch.sigmoid(x)
         if self.return_levels:
             return y, x, layers
         return y, x

@@ -157,9 +157,10 @@ class SegListMS(torch.utils.data.Dataset):
             assert len(self.image_list) == len(self.label_list)
 
 
-def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print_freq=10):
+def validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_score=None, print_freq=10):
     batch_time = AverageMeter()
-    losses = AverageMeter()
+    bce_losses = AverageMeter()
+    embed_losses = AverageMeter()
     score = AverageMeter()
 
     # switch to evaluate mode
@@ -182,12 +183,14 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
         target_var = torch.autograd.Variable(target, volatile=True)
 
         # compute output
-        output = model(input_var)[0]
-        loss = criterion(output, target_var)
-
+        output, embedding = model(input_var)
+        bce_loss = criterion(output, target_var)
+        embed_loss = embed_criterion(output, embedding)
+        
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
+        bce_losses.update(bce_loss.data[0], input.size(0))
+        embed_losses.update(embed_loss.data[0], input.size(0))
         if eval_score is not None:
             score.update(eval_score(output, target_var), input.size(0))
 
@@ -196,7 +199,8 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
         end = time.time()
 
         if i % print_freq == 0:
-            writer.add_scalar('validate/loss', losses.avg, step)
+            writer.add_scalar('validate/bce_loss', bce_losses.avg, step)
+            writer.add_scalar('validate/embed_loss', embed_losses.avg, step)
             writer.add_scalar('validate/score_avg', score.avg, step)
             writer.add_scalar('validate/score', score.val, step)
             
@@ -208,9 +212,10 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
             writer.add_image('validate/prob', prob[0], step)
             print('Test: [{0}/{1}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'BCE Loss {bce_loss.val:.4f} ({bce_loss.avg:.4f})\t'
+                  'Embed Loss {embed_loss.val:.4f} ({embed_loss.avg:.4f})\t'
                   'Score {score.val:.3f} ({score.avg:.3f})'.format(
-                    i, len(val_loader), batch_time=batch_time, loss=losses,
+                    i, len(val_loader), batch_time=batch_time, bce_loss=bce_losses, embed_loss=embed_losses,
                     score=score), flush=True)
 
     print(' * Score {top1.avg:.3f}'.format(top1=score))
@@ -253,7 +258,8 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
           eval_score=None, print_freq=10):
     batch_time = AverageMeter()
     data_time = AverageMeter()
-    losses = AverageMeter()
+    bce_losses = AverageMeter()
+    embed_losses = AverageMeter()
     scores = AverageMeter()
 
     # switch to train mode
@@ -288,13 +294,16 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
         
         # compute output
         output, embedding = model(input_var)
+
         bce_loss = criterion(output, target_var.view(target_var.size(0), -1))
-        embed_loss = embed_criterion(target_var, embedding)
+        embed_loss = embed_criterion(target_var, embedding) * 0.1
         loss = bce_loss + embed_loss
         
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
+        bce_losses.update(bce_loss.data[0], input.size(0))
+        embed_losses.update(embed_loss.data[0], input.size(0))
+        
         if eval_score is not None:
             scores.update(eval_score(output, target_var), input.size(0))
 
@@ -309,24 +318,26 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
 
         if i % print_freq == 0:
             # broadcast results to tensorboard
-            writer.add_scalar('train/bce_loss', losses.avg, step)
-            writer.add_scalar('train/embed_loss', losses.avg, step)
+            writer.add_scalar('train/bce_loss', bce_losses.avg, step)
+            writer.add_scalar('train/embed_loss', embed_losses.avg, step)
             writer.add_scalar('train/score_avg', scores.avg, step)
             writer.add_scalar('train/score', scores.val, step)
             
             prob = output.detach().view(target_var.size()).cpu().numpy()
-            prediction = prob > 0.5
-            
             writer.add_image('train/gt', target[0].cpu().numpy(), step)
-            writer.add_image('train/predicted', prediction[0], step)
             writer.add_image('train/prob', prob[0], step)
+            prob[prob >= 0.5] = 1
+            prob[prob < 0.5] = 0
+            writer.add_image('train/prediction', prob[0], step)
+            
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'BCE Loss {bce_loss.val:.4f} ({bce_loss.avg:.4f})\t'
+                  'Embedding Loss {embed_loss.val:.4f} ({embed_loss.avg:.4f})\t'
                   'Score {top1.val:.3f} ({top1.avg:.3f})'.format(
                     epoch, i, len(train_loader), batch_time=batch_time,
-                    data_time=data_time, loss=losses, top1=scores))
+                    data_time=data_time, bce_loss=bce_losses, embed_loss=embed_losses, top1=scores))
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -410,7 +421,7 @@ def train_net(args, writer, interactive=False):
             print("=> no checkpoint found at '{}'".format(args.resume))
 
     if args.evaluate and start_epoch > 0:
-        validate(val_loader, model, criterion, start_epoch-1, writer, eval_score=accuracy)
+        validate(val_loader, model, criterion, embed_criterion, start_epoch-1, writer, eval_score=accuracy)
         return
 
     for epoch in range(start_epoch, args.epochs):
@@ -421,7 +432,7 @@ def train_net(args, writer, interactive=False):
               eval_score=accuracy)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, epoch, writer, eval_score=accuracy)
+        prec1 = validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_score=accuracy)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
