@@ -443,22 +443,48 @@ def train_net(args, writer, interactive=False):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
     cudnn.benchmark = True
+    best_prec1 = 0
+    start_epoch = 0
 
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
+            start_epoch = checkpoint['epoch']
+            best_prec1 = checkpoint['best_prec1']
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    # evaluate on validation set
-    prec1 = evaluate(val_loader, model, eval_score=accuracy)
+    if args.evaluate and start_epoch > 0:
+        validate(val_loader, model, criterion, embed_criterion, start_epoch - 1, writer, eval_score=accuracy)
+        return
 
-    print('prec1: ', prec1)
+    for epoch in range(start_epoch, args.epochs):
+        lr = adjust_learning_rate(args, optimizer, epoch)
+        print('Epoch: [{0}]\tlr {1:.06f}'.format(epoch, lr))
+        # train for one epoch
+        train(train_loader, model, criterion, embed_criterion, optimizer, epoch, writer,
+              eval_score=accuracy)
+
+        # evaluate on validation set
+        prec1 = validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_score=accuracy)
+
+        is_best = prec1 > best_prec1
+        best_prec1 = max(prec1, best_prec1)
+        checkpoint_path = 'checkpoint_latest.pth.tar'
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+        }, is_best, filename=checkpoint_path)
+        if (epoch + 1) % args.save_freq == 0:
+            history_path = 'checkpoint_{:03d}.pth.tar'.format(epoch + 1)
+            shutil.copyfile(checkpoint_path, history_path)
 
 
 def adjust_learning_rate(args, optimizer, epoch):
@@ -748,55 +774,29 @@ def eval_net(args, writer, interactive=False):
     )
 
     cudnn.benchmark = True
-    best_prec1 = 0
-    start_epoch = 0
 
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
-            start_epoch = checkpoint['epoch']
-            best_prec1 = checkpoint['best_prec1']
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    if args.evaluate and start_epoch > 0:
-        validate(val_loader, model, criterion, embed_criterion, start_epoch - 1, writer, eval_score=accuracy)
-        return
-
-    for epoch in range(start_epoch, args.epochs):
-        lr = adjust_learning_rate(args, optimizer, epoch)
-        print('Epoch: [{0}]\tlr {1:.06f}'.format(epoch, lr))
-        # train for one epoch
-        train(train_loader, model, criterion, embed_criterion, optimizer, epoch, writer,
-              eval_score=accuracy)
-
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_score=accuracy)
+        prec1 = evaluate(val_loader, model, eval_score=accuracy)
 
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-        checkpoint_path = 'checkpoint_latest.pth.tar'
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-        }, is_best, filename=checkpoint_path)
-        if (epoch + 1) % args.save_freq == 0:
-            history_path = 'checkpoint_{:03d}.pth.tar'.format(epoch + 1)
-            shutil.copyfile(checkpoint_path, history_path)
+        print('prec1: ', prec1)
 
 
 def parse_args():
     # Training settings
     parser = argparse.ArgumentParser(
         description='DLA Segmentation and Boundary Prediction')
-    parser.add_argument('cmd', choices=['train', 'test', 'interactive'])
+    parser.add_argument('cmd', choices=['train', 'test', 'eval'])
     parser.add_argument('-d', '--data-dir', default=None)
     parser.add_argument('-c', '--classes', default=0, type=int)
     parser.add_argument('-s', '--crop-size', default=0, type=int)
@@ -875,8 +875,8 @@ def main():
         train_net(args, writer, interactive='interactive' in args.cmd)
     elif 'test' in args.cmd:
         test_net(args, writer, interactive='interactive' in args.cmd)
-    elif 'interactive' in args.cmd:
-        eval_net(args, writer, interractive='interactive' in args.cmd)
+    elif 'eval' in args.cmd:
+        eval_net(args, writer, interactive='interactive' in args.cmd)
 
 
 if __name__ == '__main__':
