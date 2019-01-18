@@ -30,6 +30,7 @@ from augmentation import Normalize
 
 try:
     from modules import batchnormsync
+
     HAS_BN_SYNC = True
 except ImportError:
     HAS_BN_SYNC = False
@@ -186,7 +187,7 @@ def validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_
         output, embedding = model(input_var)
         bce_loss = criterion(output, target_var)
         embed_loss = embed_criterion(output, embedding)
-        
+
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         bce_losses.update(bce_loss.data[0], input.size(0))
@@ -203,7 +204,7 @@ def validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_
             writer.add_scalar('validate/embed_loss', embed_losses.avg, step)
             writer.add_scalar('validate/score_avg', score.avg, step)
             writer.add_scalar('validate/score', score.val, step)
-            
+
             prob = output.detach().view(target_var.size()).cpu().numpy()
             prediction = prob > 0.5
 
@@ -215,8 +216,46 @@ def validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_
                   'BCE Loss {bce_loss.val:.4f} ({bce_loss.avg:.4f})\t'
                   'Embed Loss {embed_loss.val:.4f} ({embed_loss.avg:.4f})\t'
                   'Score {score.val:.3f} ({score.avg:.3f})'.format(
-                    i, len(val_loader), batch_time=batch_time, bce_loss=bce_losses, embed_loss=embed_losses,
-                    score=score), flush=True)
+                i, len(val_loader), batch_time=batch_time, bce_loss=bce_losses, embed_loss=embed_losses,
+                score=score), flush=True)
+
+    print(' * Score {top1.avg:.3f}'.format(top1=score))
+
+    return score.avg
+
+
+def evaluate(eval_loader, model, eval_score=None, print_freq=10):
+    batch_time = AverageMeter()
+    score = AverageMeter()
+
+    # switch to evaluate mode
+    model.eval()
+
+    end = time.time()
+    for i, (input, target) in enumerate(eval_loader):
+
+        input = input.cuda()
+        target = target.cuda(non_blocking=True)
+        input_var = torch.autograd.Variable(input, volatile=True)
+        target_var = torch.autograd.Variable(target, volatile=True)
+
+        # compute output
+        output, embedding = model(input_var)
+
+        # measure accuracy
+        if eval_score is not None:
+            score.update(eval_score(output, target_var), input.size(0))
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % print_freq == 0:
+            print('Evaluation: [{0}/{1}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Score {score.val:.3f} ({score.avg:.3f})'.format(
+                i, len(eval_loader), batch_time=batch_time,
+                score=score), flush=True)
 
     print(' * Score {top1.avg:.3f}'.format(top1=score))
 
@@ -266,7 +305,7 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
     model.train()
 
     end = time.time()
-    
+
     # normalize
     info = train_loader.dataset.load_dataset_info()
     normalize = Normalize(mean=info['mean'], std=info['std'])
@@ -281,29 +320,29 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
                                torch.nn.modules.loss.MSELoss,
                                torch.nn.modules.loss.BCELoss]:
             target = target.float()
-        
+
         if i % print_freq == 0:
             step = i + len(train_loader) * epoch
             writer.add_image('train/image', input[0].numpy(), step)
-            
+
         input = normalize(input)
         input = input.cuda()
         target = target.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
-        
+
         # compute output
         output, embedding = model(input_var)
 
         bce_loss = criterion(output, target_var.view(target_var.size(0), -1))
         embed_loss = embed_criterion(target_var, embedding) * 0.1
         loss = bce_loss + embed_loss
-        
+
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         bce_losses.update(bce_loss.data[0], input.size(0))
         embed_losses.update(embed_loss.data[0], input.size(0))
-        
+
         if eval_score is not None:
             scores.update(eval_score(output, target_var), input.size(0))
 
@@ -322,22 +361,22 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
             writer.add_scalar('train/embed_loss', embed_losses.avg, step)
             writer.add_scalar('train/score_avg', scores.avg, step)
             writer.add_scalar('train/score', scores.val, step)
-            
+
             prob = output.detach().view(target_var.size()).cpu().numpy()
             writer.add_image('train/gt', target[0].cpu().numpy(), step)
             writer.add_image('train/prob', prob[0], step)
             prob[prob >= 0.5] = 1
             prob[prob < 0.5] = 0
             writer.add_image('train/prediction', prob[0], step)
-            
+
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'BCE Loss {bce_loss.val:.4f} ({bce_loss.avg:.4f})\t'
                   'Embedding Loss {embed_loss.val:.4f} ({embed_loss.avg:.4f})\t'
                   'Score {top1.val:.3f} ({top1.avg:.3f})'.format(
-                    epoch, i, len(train_loader), batch_time=batch_time,
-                    data_time=data_time, bce_loss=bce_losses, embed_loss=embed_losses, top1=scores))
+                epoch, i, len(train_loader), batch_time=batch_time,
+                data_time=data_time, bce_loss=bce_losses, embed_loss=embed_losses, top1=scores))
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -350,7 +389,7 @@ def train_net(args, writer, interactive=False):
     batch_size = args.batch_size
     num_workers = args.workers
     crop_size = args.crop_size
-    
+
     print(' '.join(sys.argv))
 
     for k, v in args.__dict__.items():
@@ -358,17 +397,17 @@ def train_net(args, writer, interactive=False):
 
     pretrained_base = args.pretrained_base
     single_model = ICNet(args.arch, 1, args.down, interactive=interactive)
-        
+
     model = torch.nn.DataParallel(single_model).cuda()
-    
+
     if args.edge_weight > 0:
         weight = torch.from_numpy(
             np.array([1, args.edge_weight], dtype=np.float32))
         criterion = nn.NLLLoss2d(ignore_index=255, weight=weight)
     else:
-#         criterion = nn.NLLLoss2d(ignore_index=255)
+        #         criterion = nn.NLLLoss2d(ignore_index=255)
         criterion = nn.BCELoss()
-    
+
     embed_criterion = embedding_net.embeddingLoss
 
     criterion.cuda()
@@ -398,54 +437,28 @@ def train_net(args, writer, interactive=False):
         pin_memory=True
     )
     params = single_model.optim_parameters()
-        
+
     optimizer = torch.optim.SGD(params,
                                 args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
     cudnn.benchmark = True
-    best_prec1 = 0
-    start_epoch = 0
 
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
-            start_epoch = checkpoint['epoch']
-            best_prec1 = checkpoint['best_prec1']
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    if args.evaluate and start_epoch > 0:
-        validate(val_loader, model, criterion, embed_criterion, start_epoch-1, writer, eval_score=accuracy)
-        return
+    # evaluate on validation set
+    prec1 = evaluate(val_loader, model, eval_score=accuracy)
 
-    for epoch in range(start_epoch, args.epochs):
-        lr = adjust_learning_rate(args, optimizer, epoch)
-        print('Epoch: [{0}]\tlr {1:.06f}'.format(epoch, lr))
-        # train for one epoch
-        train(train_loader, model, criterion, embed_criterion, optimizer, epoch, writer,
-              eval_score=accuracy)
-
-        # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_score=accuracy)
-
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-        checkpoint_path = 'checkpoint_latest.pth.tar'
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-        }, is_best, filename=checkpoint_path)
-        if (epoch + 1) % args.save_freq == 0:
-            history_path = 'checkpoint_{:03d}.pth.tar'.format(epoch + 1)
-            shutil.copyfile(checkpoint_path, history_path)
+    print('prec1: ', prec1)
 
 
 def adjust_learning_rate(args, optimizer, epoch):
@@ -706,11 +719,84 @@ def test_net(args, writer, interactive=False):
     print('mAP: ', mAP)
 
 
+def eval_net(args, writer, interactive=False):
+    batch_size = args.batch_size
+    num_workers = args.workers
+    crop_size = args.crop_size
+
+    print(' '.join(sys.argv))
+
+    for k, v in args.__dict__.items():
+        print(k, ':', v)
+
+    pretrained_base = args.pretrained_base
+    single_model = ICNet(args.arch, 1, args.down, interactive=interactive)
+
+    model = torch.nn.DataParallel(single_model).cuda()
+
+    data_dir = args.data_dir
+    info = dataset.load_dataset_info(data_dir)
+    normalize = transforms.Normalize(mean=info.mean, std=info.std)
+    t = []
+    t.extend([transforms.ToTensor(),
+              normalize])
+
+    val_loader = torch.utils.data.DataLoader(
+        CityscapesSingleInstanceDataset(data_dir, 'val'),
+        batch_size=batch_size, shuffle=False, num_workers=num_workers,
+        pin_memory=True
+    )
+
+    cudnn.benchmark = True
+    best_prec1 = 0
+    start_epoch = 0
+
+    # optionally resume from a checkpoint
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume)
+            start_epoch = checkpoint['epoch']
+            best_prec1 = checkpoint['best_prec1']
+            model.load_state_dict(checkpoint['state_dict'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
+
+    if args.evaluate and start_epoch > 0:
+        validate(val_loader, model, criterion, embed_criterion, start_epoch - 1, writer, eval_score=accuracy)
+        return
+
+    for epoch in range(start_epoch, args.epochs):
+        lr = adjust_learning_rate(args, optimizer, epoch)
+        print('Epoch: [{0}]\tlr {1:.06f}'.format(epoch, lr))
+        # train for one epoch
+        train(train_loader, model, criterion, embed_criterion, optimizer, epoch, writer,
+              eval_score=accuracy)
+
+        # evaluate on validation set
+        prec1 = validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_score=accuracy)
+
+        is_best = prec1 > best_prec1
+        best_prec1 = max(prec1, best_prec1)
+        checkpoint_path = 'checkpoint_latest.pth.tar'
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+        }, is_best, filename=checkpoint_path)
+        if (epoch + 1) % args.save_freq == 0:
+            history_path = 'checkpoint_{:03d}.pth.tar'.format(epoch + 1)
+            shutil.copyfile(checkpoint_path, history_path)
+
+
 def parse_args():
     # Training settings
     parser = argparse.ArgumentParser(
         description='DLA Segmentation and Boundary Prediction')
-    parser.add_argument('cmd', choices=['train', 'test'])
+    parser.add_argument('cmd', choices=['train', 'test', 'interactive'])
     parser.add_argument('-d', '--data-dir', default=None)
     parser.add_argument('-c', '--classes', default=0, type=int)
     parser.add_argument('-s', '--crop-size', default=0, type=int)
@@ -789,6 +875,9 @@ def main():
         train_net(args, writer, interactive='interactive' in args.cmd)
     elif 'test' in args.cmd:
         test_net(args, writer, interactive='interactive' in args.cmd)
-        
+    elif 'interactive' in args.cmd:
+        eval_net(args, writer, interractive='interactive' in args.cmd)
+
+
 if __name__ == '__main__':
     main()
