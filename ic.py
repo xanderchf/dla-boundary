@@ -191,24 +191,28 @@ def validate(val_loader, model, criterion, embed_criterion, epoch, writer, eval_
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         bce_losses.update(bce_loss.data[0], input.size(0))
         embed_losses.update(embed_loss.data[0], input.size(0))
+        
+        # getting the predicted mask
+        mask = torch.zeros_like(output)
+        mask[output > 0.5] = 1
         if eval_score is not None:
-            score.update(eval_score(output, target_var), input.size(0))
+            score.update(eval_score(mask, target_var), input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
         if i % print_freq == 0:
+            prob = output.detach().view(target_var.size()).cpu().numpy()
+            mask = mask.detach().view(target_var.size()).cpu().numpy()            
+            
             writer.add_scalar('validate/bce_loss', bce_losses.avg, step)
             writer.add_scalar('validate/embed_loss', embed_losses.avg, step)
             writer.add_scalar('validate/score_avg', score.avg, step)
             writer.add_scalar('validate/score', score.val, step)
             
-            prob = output.detach().view(target_var.size()).cpu().numpy()
-            prediction = prob > 0.5
-
             writer.add_image('validate/gt', target[0].cpu().numpy(), step)
-            writer.add_image('validate/predicted', prediction[0], step)
+            writer.add_image('validate/predicted', mask[0], step)
             writer.add_image('validate/prob', prob[0], step)
             print('Test: [{0}/{1}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -264,7 +268,7 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
 
     # switch to train mode
     model.train()
-
+    
     end = time.time()
     
     # normalize
@@ -272,6 +276,7 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
     normalize = Normalize(mean=info['mean'], std=info['std'])
 
     for i, (input, target) in enumerate(train_loader):
+        step = i + len(train_loader) * epoch
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -283,7 +288,6 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
             target = target.float()
         
         if i % print_freq == 0:
-            step = i + len(train_loader) * epoch
             writer.add_image('train/image', input[0].numpy(), step)
             
         input = normalize(input)
@@ -296,16 +300,23 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
         output, embedding = model(input_var)
 
         bce_loss = criterion(output, target_var.view(target_var.size(0), -1))
-        embed_loss = embed_criterion(target_var, embedding) * 0.1
-        loss = bce_loss + embed_loss
+        embed_loss = embed_criterion(target_var, embedding)
+        if step < 10000:
+            loss = bce_loss + embed_loss * 0.1
+        elif step < 20000:
+            loss = bce_loss + embed_loss * 0.5
+        else:
+            loss = bce_loss + embed_loss
         
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         bce_losses.update(bce_loss.data[0], input.size(0))
         embed_losses.update(embed_loss.data[0], input.size(0))
         
+        mask = torch.zeros_like(output)
+        mask[output > 0.5] = 1
         if eval_score is not None:
-            scores.update(eval_score(output, target_var), input.size(0))
+            scores.update(eval_score(mask, target_var), input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -324,11 +335,10 @@ def train(train_loader, model, criterion, embed_criterion, optimizer, epoch, wri
             writer.add_scalar('train/score', scores.val, step)
             
             prob = output.detach().view(target_var.size()).cpu().numpy()
+            mask = mask.detach().view(target_var.size()).cpu().numpy()            
             writer.add_image('train/gt', target[0].cpu().numpy(), step)
             writer.add_image('train/prob', prob[0], step)
-            prob[prob >= 0.5] = 1
-            prob[prob < 0.5] = 0
-            writer.add_image('train/prediction', prob[0], step)
+            writer.add_image('train/prediction', mask[0], step)
             
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'

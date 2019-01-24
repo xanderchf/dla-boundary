@@ -32,7 +32,7 @@ class EmbeddingNet(nn.Module):
                           kernel_size=kernel_size, stride=1,
                           padding=kernel_size // 2, bias=False),
                 dla_up.__dict__.get('BatchNorm')(out_dim),
-                nn.ReLU(inplace=True))
+                nn.Tanh())
                 
         up_factor = 2 ** first_level
         if up_factor > 1:

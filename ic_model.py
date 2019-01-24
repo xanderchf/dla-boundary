@@ -16,13 +16,6 @@ class ICNet(nn.Module):
         self.interactive_net = FlatEmbeddingNet() if interactive else None
         self.kernel_layer = KernelLayer()
         
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, (2. / n) ** 0.5)
-            elif isinstance(m, dla_up.BatchNorm):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
                 
     def forward(self, x, interactive=False):
         
