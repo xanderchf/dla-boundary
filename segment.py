@@ -164,7 +164,7 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
+    for i, (input, target, _) in enumerate(val_loader):
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
                                torch.nn.modules.loss.MSELoss]:
             target = target.float()
@@ -263,7 +263,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
     info = train_loader.dataset.load_dataset_info()
     normalize = Normalize(mean=info['mean'], std=info['std'])
 
-    for i, (input, target) in enumerate(train_loader):
+    for i, (input, target, _) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -461,7 +461,14 @@ def crop_image(image, size):
     return image.crop((left, upper, right, lower))
 
 
-def save_output_images(predictions, filenames, output_dir, sizes=None):
+def paste_image(image, bbox, out_size):
+    x1, x2, y1, y2 = bbox
+    output = np.zeros(out_size)
+    output[y1:y2, x1:x2] = image
+    return output
+
+
+def save_output_images(predictions, filenames, output_dir, sizes, out_size):
     """
     Saves a given (B x C x H x W) into an image file.
     If given a mini-batch tensor, will save the tensor as a grid of images.
@@ -470,7 +477,7 @@ def save_output_images(predictions, filenames, output_dir, sizes=None):
     for ind in range(len(filenames)):
         im = Image.fromarray(predictions[ind].astype(np.uint8))
         if sizes is not None:
-            im = crop_image(im, sizes[ind])
+            im = paste_image(im, sizes[ind], out_size)
         fn = os.path.join(output_dir, filenames[ind][:-4] + '.png')
         out_dir = split(fn)[0]
         if not exists(out_dir):
@@ -478,12 +485,12 @@ def save_output_images(predictions, filenames, output_dir, sizes=None):
         im.save(fn)
 
 
-def save_prob_images(prob, filenames, output_dir, sizes=None):
+def save_prob_images(prob, filenames, output_dir, sizes, out_size):
     for ind in range(len(filenames)):
         im = Image.fromarray(
             (prob[ind][1].squeeze().data.cpu().numpy() * 255).astype(np.uint8))
         if sizes is not None:
-            im = crop_image(im, sizes[ind])
+            im = paste_image(im, sizes[ind], out_size)
         fn = os.path.join(output_dir, filenames[ind][:-4] + '.png')
         out_dir = split(fn)[0]
         if not exists(out_dir):
@@ -521,9 +528,10 @@ def test(eval_data_loader, model, num_classes,
         batch_time.update(time.time() - end)
         prob = torch.exp(final)
         if save_vis:
-            save_output_images(pred, name, output_dir, size)
+            out_size = eval_data_loader.dataset.img_size
+            save_output_images(pred, name, output_dir, size, out_size)
             if prob.size(1) == 2:
-                save_prob_images(prob, name, output_dir + '_prob', size)
+                save_prob_images(prob, name, output_dir + '_prob', size, out_size)
             else:
                 save_colorful_images(pred, name, output_dir + '_color',
                                      CITYSCAPE_PALLETE)
