@@ -147,8 +147,7 @@ class DLASeg(nn.Module):
             up = Identity()
         self.up = up
         self.softmax = nn.LogSoftmax(dim=1)
-        self.relu = nn.ReLU()
-
+        
         for m in self.fc.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
