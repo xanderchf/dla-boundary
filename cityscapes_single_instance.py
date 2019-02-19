@@ -251,7 +251,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         img = tf.to_tensor(img).float()
         ins = (tf.to_tensor(ins).long().squeeze(0))
         
-        return img, ins
+        return img, ins, bbox
     
 
     def decode_segmap(self, temp):
