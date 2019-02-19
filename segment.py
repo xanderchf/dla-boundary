@@ -60,20 +60,6 @@ CITYSCAPE_PALLETE = np.asarray([
     [0, 0, 0]], dtype=np.uint8)
 
 
-class RMSE(nn.Module):
-    def __init__(self, ignore_index=255):
-        super(RMSE, self).__init__()
-        self.ignore_index = ignore_index
-
-    def forward(self, pred, target):
-        # if not pred.shape == target.shape:
-        #     _,_,H,W = target.shape
-        #     pred = F.upsample(pred, size=(H,W), mode='bilinear')
-        mask = (target != self.ignore_index).float()
-        loss = torch.abs(target-pred) * mask
-        loss = torch.mean(loss)
-        return loss
-
 class SegList(torch.utils.data.Dataset):
     def __init__(self, data_dir, phase, transforms, list_dir=None,
                  out_name=False, out_size=False, binary=False):
@@ -180,8 +166,7 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
     end = time.time()
     for i, (input, target, _) in enumerate(val_loader):
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
-                               torch.nn.modules.loss.MSELoss,
-                               RMSE]:
+                               torch.nn.modules.loss.MSELoss]:
             target = target.float()
 
         if i % print_freq == 0:
@@ -286,8 +271,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
         # pdb.set_trace()
 
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
-                               torch.nn.modules.loss.MSELoss,
-                               RMSE]:
+                               torch.nn.modules.loss.MSELoss]:
             target = target.float()
 
         if i % print_freq == 0:
@@ -365,8 +349,6 @@ def train_seg(args, writer):
         args.classes, pretrained_base, down_ratio=args.down)
     model = torch.nn.DataParallel(single_model).cuda()
     
-    # Regression
-#     criterion = RMSE(ignore_index=255)
     # Classification
     criterion = nn.NLLLoss2d(ignore_index=255)
 
