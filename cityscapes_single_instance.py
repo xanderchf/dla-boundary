@@ -259,7 +259,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
             ins = ins.long()
             
         return img, ins
-    
+
 
     def decode_segmap(self, temp):
         r = temp.copy()
