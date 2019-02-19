@@ -60,6 +60,20 @@ CITYSCAPE_PALLETE = np.asarray([
     [0, 0, 0]], dtype=np.uint8)
 
 
+class RMSE(nn.Module):
+    def __init__(self, ignore_index=255):
+        super(RMSE, self).__init__()
+        self.ignore_index = ignore_index
+
+    def forward(self, pred, target):
+        # if not pred.shape == target.shape:
+        #     _,_,H,W = target.shape
+        #     pred = F.upsample(pred, size=(H,W), mode='bilinear')
+        mask = (target != self.ignore_index).float()
+        loss = torch.abs(target-pred) * mask
+        loss = torch.mean(loss)
+        return loss
+
 class SegList(torch.utils.data.Dataset):
     def __init__(self, data_dir, phase, transforms, list_dir=None,
                  out_name=False, out_size=False, binary=False):
@@ -166,7 +180,8 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
-                               torch.nn.modules.loss.MSELoss]:
+                               torch.nn.modules.loss.MSELoss,
+                               RMSE]:
             target = target.float()
 
         if i % print_freq == 0:
@@ -196,13 +211,14 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
             writer.add_scalar('validate/loss', losses.avg, step)
             writer.add_scalar('validate/score_avg', score.avg, step)
             writer.add_scalar('validate/score', score.val, step)
-            
+
             prediction = np.argmax(output.detach().cpu().numpy(), axis=1)
             prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
 
             writer.add_image('validate/gt', np.expand_dims(target[0].cpu().numpy(), axis=0), step)
             writer.add_image('validate/predicted', np.expand_dims(prediction[0], axis=0), step)
-            writer.add_image('validate/prob', np.expand_dims(prob[0][1], axis=0), step)
+            
+            # writer.add_image('validate/prob', np.expand_dims(prob[0][1], axis=0), step)
             print('Test: [{0}/{1}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
@@ -258,7 +274,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
     model.train()
 
     end = time.time()
-    
+
     # normalize
     info = train_loader.dataset.load_dataset_info()
     normalize = Normalize(mean=info['mean'], std=info['std'])
@@ -270,19 +286,21 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
         # pdb.set_trace()
 
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
-                               torch.nn.modules.loss.MSELoss]:
+                               torch.nn.modules.loss.MSELoss,
+                               RMSE]:
             target = target.float()
-        
+
         if i % print_freq == 0:
             step = i + len(train_loader) * epoch
             writer.add_image('train/image', input[0].numpy(), step)
-            
+
         input = normalize(input)
         input = input.cuda()
+        
         target = target.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
-        
+
         # compute output
         output = model(input_var)[0]
         loss = criterion(output, target_var)
@@ -292,7 +310,7 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
         losses.update(loss.data[0], input.size(0))
         if eval_score is not None:
             scores.update(eval_score(output, target_var), input.size(0))
-
+        
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
@@ -307,13 +325,15 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
             writer.add_scalar('train/loss', losses.avg, step)
             writer.add_scalar('train/score_avg', scores.avg, step)
             writer.add_scalar('train/score', scores.val, step)
-            
-            prediction = np.argmax(output.detach().cpu().numpy(), axis=1)
-            prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
 
-            writer.add_image('train/gt', np.expand_dims(target[0].cpu().numpy(), axis=0), step)
-            writer.add_image('train/predicted', np.expand_dims(prediction[0], axis=0), step)
-            writer.add_image('train/prob', np.expand_dims(prob[0][1], axis=0), step)
+            prediction = output[0].detach().cpu().numpy()
+            prediction = np.argmax(prediction, axis=0)
+            # prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
+            gt_img = target[0].cpu().numpy()
+            
+            writer.add_image('train/gt', np.expand_dims((gt_img.astype(float) * 255 / 16.).astype(int), axis=0), step)
+            writer.add_image('train/predicted', np.expand_dims((prediction.astype(float) * 255 / 16.).astype(int), axis=0), step)
+            # writer.add_image('train/prob', np.expand_dims(prob[0][1], axis=0), step)
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -344,12 +364,11 @@ def train_seg(args, writer):
     single_model = dla_up.__dict__.get(args.arch)(
         args.classes, pretrained_base, down_ratio=args.down)
     model = torch.nn.DataParallel(single_model).cuda()
-    if args.edge_weight > 0:
-        weight = torch.from_numpy(
-            np.array([1, args.edge_weight], dtype=np.float32))
-        criterion = nn.NLLLoss2d(ignore_index=255, weight=weight)
-    else:
-        criterion = nn.NLLLoss2d(ignore_index=255)
+    
+    # Regression
+#     criterion = RMSE(ignore_index=255)
+    # Classification
+    criterion = nn.NLLLoss2d(ignore_index=255)
 
     criterion.cuda()
 
@@ -368,12 +387,12 @@ def train_seg(args, writer):
               transforms.ToTensor(),
               normalize])
     train_loader = torch.utils.data.DataLoader(
-        CityscapesSingleInstanceDataset(data_dir, 'train', out_dir=args.out_dir),
+        CityscapesSingleInstanceDataset(data_dir, 'train', mode='dist_transform_cls', out_dir=args.out_dir),
         batch_size=batch_size, shuffle=True, num_workers=num_workers,
         pin_memory=True
     )
     val_loader = torch.utils.data.DataLoader(
-        CityscapesSingleInstanceDataset(data_dir, 'val', out_dir=args.out_dir),
+        CityscapesSingleInstanceDataset(data_dir, 'val', mode='dist_transform_cls', out_dir=args.out_dir),
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
         pin_memory=True
     )
@@ -407,11 +426,10 @@ def train_seg(args, writer):
         lr = adjust_learning_rate(args, optimizer, epoch)
         print('Epoch: [{0}]\tlr {1:.06f}'.format(epoch, lr))
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, writer,
-              eval_score=accuracy)
+        train(train_loader, model, criterion, optimizer, epoch, writer) # , eval_score=accuracy)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, epoch, writer, eval_score=accuracy)
+        prec1 = validate(val_loader, model, criterion, epoch, writer) # , eval_score=accuracy)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
@@ -645,7 +663,7 @@ def test_seg(args, writer):
               transforms.ToTensor(),
               normalize])
     test_loader = torch.utils.data.DataLoader(
-        CityscapesSingleInstanceDataset(data_dir, 'val', out_dir=args.out_dir),
+        CityscapesSingleInstanceDataset(data_dir, 'val', mode='dist_transform_cls', out_dir=args.out_dir),
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
         pin_memory=False
     )
@@ -771,7 +789,7 @@ def main():
                   'is not imported.')
 
     timestamp = datetime.fromtimestamp(time.time()).strftime('%Y%n%d-%H:%M')
-    writer = SummaryWriter('logs/{}'.format(timestamp))
+    writer = SummaryWriter('{}/{}'.format(args.log_dir, timestamp))
     if args.cmd == 'train':
         train_seg(args, writer)
     elif args.cmd == 'test':
