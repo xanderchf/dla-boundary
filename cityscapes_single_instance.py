@@ -54,7 +54,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         root,
         split="train",
         is_transform=False,
-        img_size=(512, 1024),
+        img_size=(1024, 2048),
         augmentations=None,
         train_transform=Compose([RandomHorizontallyFlip(0.5)]),
         scale_transform=Compose([Resize([224, 224])]),
