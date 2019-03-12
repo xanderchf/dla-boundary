@@ -229,13 +229,21 @@ class Normalize(object):
     channel = (channel - mean) / std
     """
 
-    def __init__(self, mean, std):
-        self.mean = torch.FloatTensor(mean)
-        self.std = torch.FloatTensor(std)
-
+    def __init__(self, mean=None, std=None):
+        if (mean is not None) and (std is not None):
+            self.mean = torch.FloatTensor(mean)
+            self.std = torch.FloatTensor(std)
+        else:
+            self.mean = None
+            self.std = None
+            
     def __call__(self, image, label=None):
-        for t, m, s in zip(image, self.mean, self.std):
-            t.sub_(m).div_(s)
+        if (self.mean is None) or (self.std is None):
+            for t in image:
+                t.sub_(torch.mean(t)).div_(torch.std(t))
+        else:
+            for t, m, s in zip(image, self.mean, self.std):
+                t.sub_(m).div_(s)
         if label is None:
             return image
         else:

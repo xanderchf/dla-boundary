@@ -59,7 +59,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         train_transform=Compose([RandomHorizontallyFlip(0.5)]),
         scale_transform=Compose([Resize([224, 224])]),
         version="cityscapes",
-        out_dir=""
+        out_dir="",
     ):
         """__init__
         :param root:
@@ -236,8 +236,11 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         bbox = self.labels_coords[index]
         ins[ins != self.ins_ids[index]] = 0
         ins[ins == self.ins_ids[index]] = 1
-        
-        img, ins = self.crop_bbox(img, ins, bbox, random_crop = self.split=='train')
+        if self.split != 'train':
+            mask = ins.copy()
+            mask = np.array(get_boundary_map(Image.fromarray(mask)))
+            
+        img, ins, loaded_bbox = self.crop_bbox(img, ins, bbox, random_crop = self.split=='train')
         
         img = Image.fromarray(img)
         ins = Image.fromarray(ins)
@@ -251,7 +254,16 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         img = tf.to_tensor(img).float()
         ins = (tf.to_tensor(ins).long().squeeze(0))
         
-        return img, ins, bbox
+        info = {}
+        if self.split != 'train':
+            info = {
+                'bbox': np.array(loaded_bbox),
+                'name': img_path.split('/')[-1][:-16],
+                'mask': mask,
+                'ind': index
+            }
+        
+        return img, ins, info
     
 
     def decode_segmap(self, temp):
@@ -311,7 +323,7 @@ class CityscapesSingleInstanceDataset(data.Dataset):
         
         img_out[:y2-y1, :x2-x1, :] = img[y1:y2,x1:x2,:]
         lbl_out[:y2-y1, :x2-x1] = lbl[y1:y2,x1:x2] 
-        return img_out.astype(np.uint8), lbl_out.astype(np.uint8)
+        return img_out.astype(np.uint8), lbl_out.astype(np.uint8), [x1, y1, x2, y2, patch_w]
     
     def get_bbox(self, ins, ins_id):
         # get instance bitmap

@@ -24,7 +24,8 @@ import dla_up
 import data_transforms as transforms
 import dataset
 from cityscapes_single_instance import CityscapesSingleInstanceDataset
-from augmentation import Normalize
+from data_transforms import Normalize
+import cv2
 
 try:
     from modules import batchnormsync
@@ -154,7 +155,93 @@ class SegListMS(torch.utils.data.Dataset):
             self.label_list = [line.strip() for line in open(label_path, 'r')]
             assert len(self.image_list) == len(self.label_list)
 
+            
+class BddLaneList(torch.utils.data.Dataset):
+    def __init__(self, data_dir, phase, transforms, list_dir=None,
+                 out_name=False, out_size=False, binary=False, out_dir=None):
+        self.list_dir = data_dir if list_dir is None else list_dir
+        self.data_dir = data_dir
+        self.out_name = out_name
+        self.phase = phase
+        self.transforms = transforms
+        self.image_list = []
+        self.labels = []
+        self.attributes = []
+        self.bbox_list = None
+        self.out_size = out_size
+        self.binary = binary
+        self.read_lists()
 
+    def __getitem__(self, index):
+        image_dir = join(self.data_dir, 'images', '100k', self.phase, self.image_list[index])
+        image = Image.open(image_dir)
+        data = [image]
+        labels = self.labels[index]
+        attributes = self.attributes[index]
+        
+        w, h = image.size
+        label_maps = self.get_label_map(labels, attributes, h, w)
+        data.append(Image.fromarray(label_maps, 'L'))
+        data = list(self.transforms(image, Image.fromarray(label_maps, 'L')))
+        if self.out_name:
+            if self.label_list is None:
+                data.append(data[0][0, :, :])
+            data.append(self.image_list[index])
+        if self.out_size:
+            data.append(torch.from_numpy(np.array(image.size, dtype=int)))
+        data.append(image_dir)
+        return tuple(data)
+
+    def __len__(self):
+        return len(self.image_list)
+
+
+    def get_label_map(self, labels, attributes, h, w):
+        keys = list(attributes.keys())
+        attribute_ids = attributes[keys[0]]
+        
+        for key in keys[1:]:
+            attribute_ids *= 2
+            attribute_ids += attributes[key]
+        
+        attribute_ids = attribute_ids.astype(np.uint8)
+            
+        out = np.zeros((h, w, 3), np.uint8)
+        
+        for i in range(len(labels)):
+            # attribute_id as color
+            c = int(attribute_ids[i] + 1)
+            out = cv2.polylines(out, [np.array(labels[i], dtype=np.int32)], False, (c, c, c), 1)    
+        
+        return out[:, :, 0]
+        
+        
+    def read_lists(self):
+        label_path = join(self.list_dir, 'labels', 'bdd100k_labels_images_{}.json'.format(self.phase))
+        
+        with open(label_path) as f:
+            labeled_images = json.load(f)
+        
+        for i in range(len(labeled_images)):
+            labeled_images[i]['labels'] = [l for l in labeled_images[i]['labels'] if l['category'] == 'lane']
+            
+        
+        labeled_images = [i for i in labeled_images if len(i['labels']) > 0]
+        
+        for i in labeled_images:
+            self.image_list += [i['name']]
+            self.labels += [[k['vertices'] for j in i['labels'] for k in j['poly2d']]]
+            self.attributes += [
+                {
+                    'solid': np.array([j['attributes']['laneStyle'] == 'solid' for j in i['labels']])
+                }
+            ]
+            
+            
+    def load_dataset_info(self):
+        return {'mean': None, 'std': None}
+        
+            
 def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print_freq=10):
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -164,6 +251,7 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
     model.eval()
 
     end = time.time()
+    normalize = Normalize()
     for i, (input, target, _) in enumerate(val_loader):
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
                                torch.nn.modules.loss.MSELoss]:
@@ -178,6 +266,7 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 
+        input = normalize(input)
         # compute output
         output = model(input_var)[0]
         loss = criterion(output, target_var)
@@ -199,10 +288,15 @@ def validate(val_loader, model, criterion, epoch, writer, eval_score=None, print
             
             prediction = np.argmax(output.detach().cpu().numpy(), axis=1)
             prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
-
-            writer.add_image('validate/gt', target[0].cpu().numpy(), step)
-            writer.add_image('validate/predicted', prediction[0], step)
-            writer.add_image('validate/prob', prob[0][1], step)
+            
+            gt = target.data.cpu().numpy()
+            
+            writer.add_image('validate/gt_0', (gt == 0)[0][None, :, :], step)
+            writer.add_image('validate/gt_1', (gt == 1)[0][None, :, :], step)
+            writer.add_image('validate/gt_2', (gt == 2)[0][None, :, :], step)
+            writer.add_image('validate/0', prob[0, 0, :, :][None, :, :], step)
+            writer.add_image('validate/1', prob[0, 1, :, :][None, :, :], step)
+            writer.add_image('validate/2', prob[0, 2, :, :][None, :, :], step)
             print('Test: [{0}/{1}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
@@ -260,10 +354,12 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
     end = time.time()
     
     # normalize
-    info = train_loader.dataset.load_dataset_info()
-    normalize = Normalize(mean=info['mean'], std=info['std'])
-
+#     info = train_loader.dataset.load_dataset_info()
+#     normalize = Normalize(mean=info['mean'], std=info['std'])
+    normalize = Normalize()
+    
     for i, (input, target, _) in enumerate(train_loader):
+    
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -289,7 +385,8 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
 
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
+        loss_data = loss.detach().data[0].cpu().numpy()
+        losses.update(loss_data, input.size(0))
         if eval_score is not None:
             scores.update(eval_score(output, target_var), input.size(0))
 
@@ -309,11 +406,15 @@ def train(train_loader, model, criterion, optimizer, epoch, writer,
             writer.add_scalar('train/score', scores.val, step)
             
             prediction = np.argmax(output.detach().cpu().numpy(), axis=1)
-            prob = torch.nn.functional.softmax(output.detach().cpu(), dim=1).numpy()
-
-            writer.add_image('train/gt', target[0].cpu().numpy(), step)
-            writer.add_image('train/predicted', prediction[0], step)
-            writer.add_image('train/prob', prob[0][1], step)
+            prob = torch.exp(output).detach().cpu().numpy()
+            
+            gt = target.data.cpu().numpy()
+            writer.add_image('train/gt_0', (gt == 0)[0][None, :, :], step)
+            writer.add_image('train/gt_1', (gt == 1)[0][None, :, :], step)
+            writer.add_image('train/gt_2', (gt == 2)[0][None, :, :], step)
+            writer.add_image('train/0', prob[0, 0, :, :][None, :, :], step)
+            writer.add_image('train/1', prob[0, 1, :, :][None, :, :], step)
+            writer.add_image('train/2', prob[0, 2, :, :][None, :, :], step)
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -346,7 +447,7 @@ def train_seg(args, writer):
     model = torch.nn.DataParallel(single_model).cuda()
     if args.edge_weight > 0:
         weight = torch.from_numpy(
-            np.array([1, args.edge_weight], dtype=np.float32))
+            np.array([1] + [args.edge_weight] * (args.classes - 1), dtype=np.float32))
         criterion = nn.NLLLoss2d(ignore_index=255, weight=weight)
     else:
         criterion = nn.NLLLoss2d(ignore_index=255)
@@ -354,8 +455,8 @@ def train_seg(args, writer):
     criterion.cuda()
 
     data_dir = args.data_dir
-    info = dataset.load_dataset_info(data_dir)
-    normalize = transforms.Normalize(mean=info.mean, std=info.std)
+#     info = dataset.load_dataset_info(data_dir)
+#     normalize = transforms.Normalize(mean=info.mean, std=info.std)
     t = []
     if args.random_rotate > 0:
         t.append(transforms.RandomRotate(args.random_rotate))
@@ -365,15 +466,20 @@ def train_seg(args, writer):
     if args.random_color:
         t.append(transforms.RandomJitter(0.4, 0.4, 0.4))
     t.extend([transforms.RandomHorizontalFlip(),
-              transforms.ToTensor(),
-              normalize])
+              transforms.ToTensor()])
+    
+    if args.mode == 'cityscapes_boundary':
+        Dataset = CityscapesSingleInstanceDataset
+    elif args.mode == 'bdd100k_lane':
+        Dataset = BddLaneList
+        
     train_loader = torch.utils.data.DataLoader(
-        CityscapesSingleInstanceDataset(data_dir, 'train', out_dir=args.out_dir),
+        Dataset(data_dir, 'train', transforms.Compose(t), out_dir=args.out_dir),
         batch_size=batch_size, shuffle=True, num_workers=num_workers,
         pin_memory=True
     )
     val_loader = torch.utils.data.DataLoader(
-        CityscapesSingleInstanceDataset(data_dir, 'val', out_dir=args.out_dir),
+        Dataset(data_dir, 'val', transforms.Compose(t), out_dir=args.out_dir),
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
         pin_memory=True
     )
@@ -463,35 +569,70 @@ def crop_image(image, size):
 
 def paste_image(image, bbox, out_size):
     x1, x2, y1, y2 = bbox
-    output = np.zeros(out_size)
+    output = np.zeros(out_size, dtype=np.uint8)
     output[y1:y2, x1:x2] = image
-    return output
+    
+    return Image.fromarray(output)
 
 
-def save_output_images(predictions, filenames, output_dir, sizes, out_size):
+def get_output_images(predictions, output_dir, info, out_size):
     """
     Saves a given (B x C x H x W) into an image file.
     If given a mini-batch tensor, will save the tensor as a grid of images.
     """
     # pdb.set_trace()
-    for ind in range(len(filenames)):
+    loaded_bbox = info['bbox'].data.cpu().numpy()
+    ims = []
+    for ind in range(len(loaded_bbox)):
         im = Image.fromarray(predictions[ind].astype(np.uint8))
-        if sizes is not None:
-            im = paste_image(im, sizes[ind], out_size)
-        fn = os.path.join(output_dir, filenames[ind][:-4] + '.png')
+        x1, y1, x2, y2, patch_w = loaded_bbox[ind]
+        w = x2 - x1
+        h = y2 - y1
+        im = np.array(im.resize((patch_w, patch_w), Image.NEAREST))[:h, :w]
+        im = paste_image(im, [x1, x2, y1, y2], out_size)
+        ims += [im]
+    return np.stack(ims)
+        
+
+def save_output_images(ims, output_dir, info):
+    
+    inds = info['ind'].data.cpu().numpy()
+    for ind in range(len(info)):
+        fn = os.path.join(output_dir, '{}_{}.png'.format(info['name'][ind], inds[ind]))
+        out_dir = split(fn)[0]
+        if not exists(out_dir):
+            os.makedirs(out_dir)
+        Image.fromarray(ims[ind] * 255).save(fn)
+
+
+def save_gt_images(output_dir, info, out_size):
+    
+    masks = info['mask'].data.cpu().numpy()
+    inds = info['ind'].data.cpu().numpy()
+    for ind in range(len(info)):
+        fn = os.path.join(output_dir, '{}_{}.png'.format(info['name'][ind], inds[ind]))
+        if exists(fn):
+            continue
+        im = Image.fromarray(masks[ind].astype(np.uint8))
         out_dir = split(fn)[0]
         if not exists(out_dir):
             os.makedirs(out_dir)
         im.save(fn)
 
 
-def save_prob_images(prob, filenames, output_dir, sizes, out_size):
-    for ind in range(len(filenames)):
+def save_prob_images(prob, output_dir, info, out_size):
+
+    loaded_bbox = info['bbox'].data.cpu().numpy()
+    inds = info['ind'].data.cpu().numpy()
+    for ind in range(len(info)):
         im = Image.fromarray(
             (prob[ind][1].squeeze().data.cpu().numpy() * 255).astype(np.uint8))
-        if sizes is not None:
-            im = paste_image(im, sizes[ind], out_size)
-        fn = os.path.join(output_dir, filenames[ind][:-4] + '.png')
+        x1, y1, x2, y2, patch_w = loaded_bbox[ind]
+        w = x2 - x1
+        h = y2 - y1
+        im = np.array(im.resize((patch_w, patch_w), Image.BILINEAR))[:h, :w]
+        im = paste_image(im, [x1, x2, y1, y2], out_size)
+        fn = os.path.join(output_dir, '{}_{}.png'.format(info['name'][ind], inds[ind]))
         out_dir = split(fn)[0]
         if not exists(out_dir):
             os.makedirs(out_dir)
@@ -519,32 +660,45 @@ def test(eval_data_loader, model, num_classes,
     data_time = AverageMeter()
     end = time.time()
     hist = np.zeros((num_classes, num_classes))
-    for iter, (image, label, name, size) in enumerate(eval_data_loader):
+#     info = eval_data_loader.dataset.load_dataset_info()
+#     normalize = Normalize(mean=info['mean'], std=info['std'])
+    noramlize = Normalize()
+    
+    for i, (input, target, info) in enumerate(eval_data_loader):
         data_time.update(time.time() - end)
-        image_var = Variable(image, requires_grad=False, volatile=True)
-        final = model(image_var)[0]
-        _, pred = torch.max(final, 1)
+        input = normalize(input).cuda()
+        target = target.cuda(non_blocking=True)
+        input_var = torch.autograd.Variable(input)
+        target_var = torch.autograd.Variable(target)
+        
+        output = model(input_var)[0]
+        _, pred = torch.max(output, 1)
         pred = pred.cpu().data.numpy()
         batch_time.update(time.time() - end)
-        prob = torch.exp(final)
+        prob = torch.exp(output)
+        
+        # get predictions in the original scale
+        out_size = eval_data_loader.dataset.img_size
+        pred = get_output_images(pred, output_dir, info, out_size)
+        
         if save_vis:
-            out_size = eval_data_loader.dataset.img_size
-            save_output_images(pred, name, output_dir, size, out_size)
+            save_output_images(pred, output_dir, info)
             if prob.size(1) == 2:
-                save_prob_images(prob, name, output_dir + '_prob', size, out_size)
+                save_prob_images(prob, output_dir + '_prob', info, out_size)
             else:
                 save_colorful_images(pred, name, output_dir + '_color',
                                      CITYSCAPE_PALLETE)
+            save_gt_images('/'.join(output_dir.split('/')[:-1] + ['gt']), info, out_size)
+        
         if has_gt:
-            label = label.numpy()
-            hist += fast_hist(pred.flatten(), label.flatten(), num_classes)
+            hist += fast_hist(pred.flatten(), info['mask'].data.cpu().numpy().flatten(), num_classes)
             print('===> mAP {mAP:.3f}'.format(
                 mAP=round(np.nanmean(per_class_iu(hist)) * 100, 2)))
         end = time.time()
         print('Eval: [{0}/{1}]\t'
               'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
               'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-              .format(iter, len(eval_data_loader), batch_time=batch_time,
+              .format(i, len(eval_data_loader), batch_time=batch_time,
                       data_time=data_time))
     ious = per_class_iu(hist) * 100
     print(' '.join('{:.03f}'.format(i) for i in ious))
@@ -579,57 +733,9 @@ def resize_4d_tensor(tensor, width, height):
     return out
 
 
-def test_ms(eval_data_loader, model, num_classes, scales,
-            output_dir='pred', has_gt=True, save_vis=False):
-    model.eval()
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    end = time.time()
-    hist = np.zeros((num_classes, num_classes))
-    num_scales = len(scales)
-    for iter, input_data in enumerate(eval_data_loader):
-        data_time.update(time.time() - end)
-        if has_gt:
-            name = input_data[2]
-            label = input_data[1]
-        else:
-            name = input_data[1]
-        h, w = input_data[0].size()[2:4]
-        images = [input_data[0]]
-        images.extend(input_data[-num_scales:])
-        outputs = []
-        for image in images:
-            image_var = Variable(image, requires_grad=False, volatile=True)
-            final = model(image_var)[0]
-            outputs.append(final.data)
-        final = sum([resize_4d_tensor(out, w, h) for out in outputs])
-        pred = final.argmax(axis=1)
-        batch_time.update(time.time() - end)
-        if save_vis:
-            save_output_images(pred, name, output_dir)
-            save_colorful_images(pred, name, output_dir + '_color',
-                                 CITYSCAPE_PALLETE)
-        if has_gt:
-            label = label.numpy()
-            hist += fast_hist(pred.flatten(), label.flatten(), num_classes)
-            logger.info('===> mAP {mAP:.3f}'.format(
-                mAP=round(np.nanmean(per_class_iu(hist)) * 100, 2)))
-        end = time.time()
-        logger.info('Eval: [{0}/{1}]\t'
-                    'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                    'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                    .format(iter, len(eval_data_loader), batch_time=batch_time,
-                            data_time=data_time))
-    if has_gt:  # val
-        ious = per_class_iu(hist) * 100
-        logger.info(' '.join('{:.03f}'.format(i) for i in ious))
-        return round(np.nanmean(ious), 2)
-
-
 def test_seg(args, writer):
     batch_size = args.batch_size
     num_workers = args.workers
-    phase = args.phase
 
     for k, v in args.__dict__.items():
         print(k, ':', v)
@@ -640,8 +746,10 @@ def test_seg(args, writer):
     model = torch.nn.DataParallel(single_model).cuda()
 
     data_dir = args.data_dir
-    info = dataset.load_dataset_info(data_dir)
-    normalize = transforms.Normalize(mean=info.mean, std=info.std)
+#     info = dataset.load_dataset_info(data_dir)
+#     normalize = transforms.Normalize(mean=info.mean, std=info.std)
+    normalize = Normalize()
+    
     # scales = [0.5, 0.75, 1.25, 1.5, 1.75]
     scales = [0.5, 0.75, 1.25, 1.5]
     t = []
@@ -656,11 +764,6 @@ def test_seg(args, writer):
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
         pin_memory=False
     )
-    test_loader = torch.utils.data.DataLoader(
-        data,
-        batch_size=batch_size, shuffle=False, num_workers=num_workers,
-        pin_memory=False
-    )
 
     cudnn.benchmark = True
 
@@ -668,32 +771,39 @@ def test_seg(args, writer):
     start_epoch = 0
     if args.resume:
         if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)
-            start_epoch = checkpoint['epoch']
-            best_prec1 = checkpoint['best_prec1']
-            model.load_state_dict(checkpoint['state_dict'])
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
+            test_model(model, test_loader, args.resume, args, save_vis=args.save_vis)
+        elif os.path.isdir(args.resume):
+            models = sorted([i for i in os.listdir(args.resume) if i.endswith('.pth.tar')], reverse=True)
+
+            best_model = None
+            best_mAP = 0
+            for m in models:
+                mAP = test_model(model, test_loader, os.path.join(args.resume, m), args)
+                if mAP > best_mAP:
+                    best_mAP = mAP
+                    best_model = m
+            print('Best model: {}\nBest mAP: {}'.format(best_model, best_mAP))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    out_dir = '{}_{:03d}_{}'.format(args.arch, start_epoch, phase)
+
+
+def test_model(model, test_loader, ckpt_name, args, save_vis=False):
+
+    checkpoint = torch.load(ckpt_name)
+    start_epoch = checkpoint['epoch']
+    best_prec1 = checkpoint['best_prec1']
+    model.load_state_dict(checkpoint['state_dict'])
+    
+    out_dir = '{}/vis/{}_{:03d}_{}'.format(args.out_dir, args.arch, start_epoch, args.phase)
     if len(args.test_suffix) > 0:
         out_dir += '_' + args.test_suffix
 
-    if args.ms:
-        out_dir += '_ms'
-
-    if args.ms:
-        mAP = test_ms(test_loader, model, args.classes, save_vis=True,
-                      has_gt=phase != 'test' or args.with_gt,
-                      output_dir=out_dir,
-                      scales=scales)
-    else:
-        mAP = test(test_loader, model, args.classes, save_vis=True,
-                   has_gt=phase != 'test' or args.with_gt, output_dir=out_dir)
-    print('mAP: ', mAP)
+    mAP = test(test_loader, model, args.classes, save_vis=save_vis,
+           has_gt=args.phase != 'test' or args.with_gt, output_dir=out_dir)
+    
+    print("(epoch {}) mAP: {}".format(checkpoint['epoch'], mAP))
+    return mAP
 
 
 def parse_args():
@@ -753,6 +863,8 @@ def parse_args():
     parser.add_argument('--edge-weight', type=int, default=-1)
     parser.add_argument('--test-suffix', default='')
     parser.add_argument('--with-gt', action='store_true')
+    parser.add_argument('--save-vis', action='store_true', help='save inference visualization')
+    parser.add_argument('--mode', type=str, help='training mode')
     args = parser.parse_args()
     args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -780,7 +892,8 @@ def main():
     if args.cmd == 'train':
         train_seg(args, writer)
     elif args.cmd == 'test':
-        test_seg(args, writer)
+        with torch.no_grad():
+            test_seg(args, writer)
 
 
 if __name__ == '__main__':
