@@ -113,6 +113,70 @@ class SegList(torch.utils.data.Dataset):
             assert len(self.image_list) == len(self.bbox_list)
 
 
+class BddDrivableList(torch.utils.data.Dataset):
+    def __init__(self, data_dir, phase, transforms, list_dir=None,
+                 out_name=False, out_size=False, binary=False, out_dir=None):
+        self.list_dir = data_dir if list_dir is None else list_dir
+        self.data_dir = data_dir
+        self.out_name = out_name
+        self.phase = phase
+        self.transforms = transforms
+        self.image_list = []
+        self.labels = []
+        self.drivable = []
+        self.out_size = out_size
+        self.binary = binary
+        self.read_lists()
+
+    def __getitem__(self, index):
+        image = Image.open(join(self.data_dir, 'images', '100k', self.phase, self.image_list[index]))
+        data = [image]
+        labels = self.labels[index]
+        drivable = self.drivable[index]
+        
+        w, h = image.size
+        label_map = self.get_label_map(labels, drivable, h, w)
+        data.append(Image.fromarray(label_map, 'L'))
+        
+        data = list(self.transforms(*data))
+        if self.out_name:
+            if self.label_list is None:
+                data.append(data[0][0, :, :])
+            data.append(self.image_list[index])
+        data.append(torch.from_numpy(np.array(image.size, dtype=int)))
+        
+        return tuple(data)
+
+    def __len__(self):
+        return len(self.image_list)
+
+    
+    def get_label_map(self, labels, drivable, h, w):
+        out = np.zeros((h, w), dtype=np.uint8)
+        for i in range(len(labels)):
+            c = int(drivable[i] + 1)
+            out = cv2.fillPoly(out, [np.array(labels[i], dtype=np.int32)], c)
+            
+        return out[:, :]
+    
+    
+    def read_lists(self):
+        label_path = join(self.list_dir, 'labels', 'bdd100k_labels_images_{}.json'.format(self.phase))
+        
+        with open(label_path) as f:
+            labeled_images = json.load(f)
+        
+        for i in range(len(labeled_images)):
+            labeled_images[i]['labels'] = [l for l in labeled_images[i]['labels'] if l['category'] == 'drivable area']
+        
+        labeled_images = [i for i in labeled_images if len(i['labels']) > 0]
+        
+        for i in labeled_images:
+            self.image_list += [i['name']]
+            self.labels += [[k['vertices'] for j in i['labels'] for k in j['poly2d']]]
+            self.drivable += [np.array([j['attributes']['areaType'] == 'direct' for j in i['labels']])]
+            
+
 class SegListMS(torch.utils.data.Dataset):
     def __init__(self, data_dir, phase, transforms, scales, list_dir=None):
         self.list_dir = data_dir if list_dir is None else list_dir
@@ -472,6 +536,8 @@ def train_seg(args, writer):
         Dataset = CityscapesSingleInstanceDataset
     elif args.mode == 'bdd100k_lane':
         Dataset = BddLaneList
+    elif args.mode == 'bdd100k_drivable':
+        Dataset = BddDrivableList
         
     train_loader = torch.utils.data.DataLoader(
         Dataset(data_dir, 'train', transforms.Compose(t), out_dir=args.out_dir),
